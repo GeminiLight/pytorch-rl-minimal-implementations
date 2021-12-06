@@ -1,0 +1,7 @@
+*.py[cod]
+__pycache__/
+
+# unfinished
+dqn.py
+dueling_dqn.py
+double_dqn.py
