@@ -10,7 +10,7 @@ There are implementations of some reinforcement learning algorithms, whose chara
 
 | Name       | Type         | Paper                                                        | File                           |
 | ---------- | ------------ | ------------------------------------------------------------ | ------------------------------ |
-| Q-learning | Value-based  | Watkins et al. [Q-Learning](https://link.springer.com/content/pdf/10.1007/BF00992698.pdf). *Machine Learning*, 1992 | [q_learning.py](q_learning.py) |
+| Q-Learning | Value-based  | Watkins et al. [Q-Learning](https://link.springer.com/content/pdf/10.1007/BF00992698.pdf). *Machine Learning*, 1992 | [q_learning.py](q_learning.py) |
 | REINFORCE  | Policy-based | Sutton et al. [Policy Gradient Methods for Reinforcement Learning with Function Approximation](https://proceedings.neurips.cc/paper/1999/file/464d828b85b0bed98e80ade0a5c43b0f-Paper.pdf). In *NeurIPS*, 2000. | [reinforce.py](reinforce.py)   |
 | DQN        | Value-based  | Mnih et al. [Playing Atari with Deep Reinforcement Learning](https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf). In *NeurIPS Deep Learning Workshop*, 2013 | doing                          |
 | A2C        | Actor-Critic | Mnih et al. [Asynchronous Methods for Deep Reinforcement Learning](https://arxiv.org/abs/1602.01783). In *ICML*, 2016 | [a2c.py](a2c.py)               |
