@@ -21,20 +21,23 @@ class PPOAgent:
                  obs_dim, 
                  action_dim, 
                  embedding_dim=64,
-                 gamma=0.99,
+                 gamma=0.995,
                  gae_lambda=0.95,
-                 K_epochs=3,
-                 lr_actor=1e-3,
-                 lr_critic=3e-3,
+                 K_epochs=5,
+                 lr_actor=3e-2,
+                 lr_critic=3e-2,
                  lr_decay=0.99,
-                 max_grad_norm=0.5,
+                 max_grad_norm=1.,
                  eps_clip=0.2,
+                 coef_critic_loss=0.5,
+                 coef_entropy_loss=0.01,
+                 log_interval=10,
                  log_dir='logs/ppo',
                  save_dir='save/ppo',
-                 use_cuda=True,
-                 norm_reward=True,
                  norm_advantage=True,
+                 norm_critic_loss=True,
                  clip_grad=True,
+                 use_cuda=True,
                  open_tb=True,
                  open_tqdm=False,
                  verbose=True):
@@ -55,18 +58,23 @@ class PPOAgent:
         self.K_epochs = K_epochs
         self.eps_clip = eps_clip
         self.max_grad_norm = max_grad_norm
+        self.log_interval = log_interval
+
+        self.coef_critic_loss = coef_critic_loss
+        self.coef_entropy_loss = coef_entropy_loss
 
         if not os.path.exists(save_dir): 
             os.mkdir(save_dir)
         self.save_dir = save_dir
-        self.update_time = 0
         
-        self.norm_reward = norm_reward
         self.norm_advantage = norm_advantage
+        self.norm_critic_loss = norm_critic_loss
         self.clip_grad = clip_grad
         self.open_tb = open_tb
         self.open_tqdm = open_tqdm
         self.verbose = verbose
+
+        self.update_time = 0
 
     def preprocess_obs(self, obs):
         return torch.FloatTensor(obs).to(self.device).unsqueeze(0)
@@ -79,7 +87,7 @@ class PPOAgent:
         if sample:
             action = dist.sample()
         else:
-            action = action_probs.argmax(-1, keepdim=True)
+            action = action_probs.argmax(-1)
         action_logprob = dist.log_prob(action)
         # collect
         self.buffer.observations.append(obs)
@@ -88,8 +96,8 @@ class PPOAgent:
         return action.item()
 
     def estimate_obs(self, obs):
-        value = self.policy.estimate(obs).squeeze(-1)
-        return value
+        value = self.policy.estimate(obs)
+        return value.squeeze(-1)
 
     def evaluate_actions(self, old_observations, old_actions):
         actions_logits = self.policy.act(old_observations)
@@ -100,45 +108,43 @@ class PPOAgent:
         return action_logprobs, dist_entropy
 
     def update(self, next_obs):
-        next_obs = self.preprocess_obs(next_obs)
-        old_action_logprobs = torch.cat(self.buffer.action_logprobs, dim=-1)
-        old_actions = torch.cat(self.buffer.actions, dim=-1)
+        old_actions = torch.cat(self.buffer.actions, dim=0)
+        old_action_logprobs = torch.cat(self.buffer.action_logprobs, dim=0)
+        old_observations = torch.cat(self.buffer.observations, dim=0)
         masks = torch.IntTensor(self.buffer.masks).to(self.device)
         rewards = torch.FloatTensor(self.buffer.rewards).to(self.device)
-        observations = torch.cat(self.buffer.observations, dim=0)
-        observations_extra = copy.deepcopy(self.buffer.observations)
-        observations_extra.append(next_obs)
-        observations_extra = torch.cat(observations_extra, dim=0)
+        observations = copy.deepcopy(self.buffer.observations)
+        observations.append(next_obs)
+        observations = torch.cat(observations, dim=0)
+
         for i in range(self.K_epochs):
             # evaluate actions and observations
-            action_logprob, dist_entropy = self.evaluate_actions(observations, old_actions)
-            values = self.estimate_obs(observations_extra)
+            action_logprobs, dist_entropy = self.evaluate_actions(old_observations, old_actions)
+            values = self.estimate_obs(observations)
             # calculate expected return (Genralized Advantage Estimator)
             returns = torch.zeros_like(rewards).to(self.device)
             last_gae = 0
             for i in reversed(range(self.buffer.size())):
-                last_value = values[i + 1]
-                delta = rewards[i] + self.gamma * last_value * masks[i] - values[i]
+                delta = rewards[i] + self.gamma * values[i + 1].detach() * masks[i] - values[i].detach()
                 last_gae = delta + self.gamma * self.gae_lambda * masks[i] * last_gae
-                returns[i] = last_gae + values[i]
-            if self.norm_reward:
-                returns = (returns - returns.mean()) / (returns.std() + 1e-9)
+                returns[i] = last_gae + values[i].detach()
             # calculate advantage
             advantage = returns - values[:-1].detach()
             if self.norm_advantage:
                 advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-9)
             # calculate loss = actor_loss + critic_loss + entropy_loss
             # actor_loss = - (advantage * action_logprob)
-            # critic_loss = MSE(returns, values)
-            # entropy_loss = Entropy(prob)
-            ratio = torch.exp(action_logprob - old_action_logprobs)
+            ratio = torch.exp(action_logprobs - old_action_logprobs)
             surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1. - self.eps_clip, 1. + self.eps_clip) * advantage
             actor_loss = - torch.min(surr1, surr2).mean()
-            critic_loss = self.criterion_cirtic(returns, values[:-1])
+            # critic_loss = MSE(returns, values)
+            benchmark_critic_loss = (returns.std() + 1e-9) if self.norm_critic_loss else 1.
+            critic_loss = self.criterion_cirtic(returns, values[:-1]) / benchmark_critic_loss
+            # entropy_loss = Entropy(prob)
             entropy_loss = dist_entropy.mean()
-            loss = actor_loss + 0.5 * critic_loss + 0.01 * entropy_loss
-            # update parameters
+            loss = actor_loss + self.coef_critic_loss * critic_loss + self.coef_entropy_loss * entropy_loss
+            # update parameters 
             self.optimizer.zero_grad()
             loss.backward()
             if self.clip_grad:
@@ -146,19 +152,22 @@ class PPOAgent:
                 critic_grad_clipped = torch.nn.utils.clip_grad_norm_(self.policy.critic.parameters(), self.max_grad_norm)
             self.optimizer.step()
     
-        if self.open_tb:
-            self.writer.add_scalar('loss/loss', loss, self.update_time)
-            self.writer.add_scalar('loss/actor_loss', actor_loss, self.update_time)
-            self.writer.add_scalar('loss/critic_loss', critic_loss, self.update_time)
-            self.writer.add_scalar('loss/entropy_loss', entropy_loss, self.update_time)
-            self.writer.add_scalar('value/values', values[:-1].mean(), self.update_time)
-            self.writer.add_scalar('value/returns', returns.mean(), self.update_time)
-            self.writer.add_scalar('value/rewards', rewards.mean(), self.update_time)
-            self.writer.add_scalar('grad/actor_grad_clipped', actor_grad_clipped, self.update_time)
-            self.writer.add_scalar('grad/critic_grad_clipped', critic_grad_clipped, self.update_time)
+            if self.open_tb and self.update_time % self.log_interval == 0:
+                self.writer.add_scalar('train_lr', self.optimizer.defaults['lr'], self.update_time)
+                self.writer.add_scalar('train_loss/loss', loss, self.update_time)
+                self.writer.add_scalar('train_loss/actor_loss', actor_loss, self.update_time)
+                self.writer.add_scalar('train_loss/critic_loss', critic_loss, self.update_time)
+                self.writer.add_scalar('train_loss/entropy_loss', entropy_loss, self.update_time)
+                self.writer.add_scalar('train_value/values', values[:-1].mean(), self.update_time)
+                self.writer.add_scalar('train_value/returns', returns.mean(), self.update_time)
+                self.writer.add_scalar('train_value/rewards', rewards.mean(), self.update_time)
+                self.writer.add_scalar('train_value/action_logprobs', action_logprobs.mean(), self.update_time)
+                self.writer.add_scalar('train_grad/actor_grad_clipped', actor_grad_clipped, self.update_time)
+                self.writer.add_scalar('train_grad/critic_grad_clipped', critic_grad_clipped, self.update_time)
+
+            self.update_time += 1
         
         self.lr_scheduler.step()
-        self.update_time += 1
         self.buffer.clear()
 
         return loss.detach()
@@ -209,13 +218,13 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
             obs = next_obs
             # update model
             if agent.buffer.size() == batch_size:
-                loss = agent.update(obs)
+                loss = agent.update(agent.preprocess_obs(next_obs))
                 pbar.set_postfix(loss=loss.item()) if pbar is not None else None
             # episode done
             if done:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
-                    f'({max(cumulative_rewards):4.1f})')
+                    f'({max(cumulative_rewards):4.1f})') if agent.verbose else None
                 pbar.set_postfix(reward=cumulative_rewards[-1]) if pbar is not None else None
                 break
         # save model
@@ -253,10 +262,10 @@ if __name__ == '__main__':
     # config
     env_name = 'CartPole-v0'
     embedding_dim = 64
-    num_epochs = 100
+    num_epochs = 2000
     start_epoch = 0
     batch_size = 64
-    max_step=200
+    max_step = 200
 
     # initialize
     env = gym.make(env_name)

@@ -1,4 +1,5 @@
 import copy
+import numpy as np
 
 
 class ReplayBuffer:
@@ -10,6 +11,16 @@ class ReplayBuffer:
         self.values = []
         self.rewards = []
         self.masks = []
+        self.next_observations = []
+
+    def size(self):
+        return len(self.rewards)
+
+    def sample_indices(self, batch_size):
+        buffer_size = self.size()
+        assert buffer_size >= batch_size
+        sample_indices = np.random.choice(buffer_size, batch_size)
+        return sample_indices
 
     def append(self, obs, action, action_logprob, value, reward, is_terminal):
         self.observations.append(obs)
@@ -27,16 +38,13 @@ class ReplayBuffer:
         del self.rewards[:]
         del self.masks[:]
 
-    def size(self):
-        return len(self.rewards)
-
     def calc_returns(self, next_value=0, method='gae', gamma=0.99, gae_lambda=0.95):
         r"""Calculate expected returns
         
-        1. mc:     Monte Carlo
-        2. td:     Temproal Difference
-        3. gae:    Generalized Advantage Estimator
-        3. n_step: n-step Advantage
+        1. mc     | Monte Carlo
+        2. td     | Temproal Difference
+        3. gae    | Generalized Advantage Estimator
+        3. n_step | n-step Advantage
         """
         returns = [0] * len(self.rewards)
         extra_values = copy.deepcopy(self.values).append(next_value)

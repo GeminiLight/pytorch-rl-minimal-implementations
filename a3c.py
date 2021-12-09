@@ -3,11 +3,10 @@ import gym
 import copy
 import tqdm
 import torch
-from torch import optim
-from torch.distributions import Categorical
-import torch.nn as nn
+from torch import nn, optim
 import torch.nn.functional as F
 import torch.multiprocessing as mp
+from torch.distributions import Categorical
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from base.net import ActorCritic
@@ -18,7 +17,7 @@ class SharedAdam(optim.Adam):
 
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.99), eps=1e-8, weight_decay=0):
         super(SharedAdam, self).__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
-        # State initialization
+        # state initialization
         for group in self.param_groups:
             for p in group['params']:
                 state = self.state[p]
@@ -36,19 +35,26 @@ class SharedAdam(optim.Adam):
 
 
 class BaseAgent:
-
+    """
+    An Asynchronous Actor Critic-based reinforcement learning algorithm, 
+    using n-step Temporal Difference Estimator to calculate gradients.
+    """
     def __init__(self, 
                  gamma=0.99, 
+                 coef_critic_loss=0.5,
+                 coef_entropy_loss=0.00,
                  max_grad_norm=0.5,
-                 norm_reward=True,
                  norm_advantage=True,
                  clip_grad=True):
+        self.device = torch.device('cpu')
+        
         self.gamma = gamma
+        self.coef_critic_loss = coef_critic_loss
+        self.coef_entropy_loss = coef_entropy_loss  # unsupported currently
         self.max_grad_norm = max_grad_norm
-        self.norm_reward = norm_reward
         self.norm_advantage = norm_advantage
         self.clip_grad = clip_grad
-        self.device = torch.device('cpu')
+
         self.criterion_cirtic = nn.MSELoss()
         self.buffer = ReplayBuffer()
 
@@ -62,16 +68,17 @@ class BaseAgent:
         if sample:
             action = dist.sample()
         else:
-            action = action_probs.argmax(-1, keepdim=True)
+            action = action_probs.argmax(-1)
         action_logprob = dist.log_prob(action)
         # collect
+        self.buffer.observations.append(obs)
         self.buffer.actions.append(action)
         self.buffer.action_logprobs.append(action_logprob)
         return action.item()
 
     def estimate_obs(self, obs):
-        value = self.policy.estimate(obs).squeeze(-1)
-        return value
+        value = self.policy.estimate(obs)
+        return value.squeeze(-1)
 
     def train(self, mode=True):
         self.policy.train(mode=mode)
@@ -89,13 +96,15 @@ class Master(BaseAgent):
                  gamma=0.99,
                  lr_actor=1e-3,
                  lr_critic=1e-3,
+                 coef_critic_loss=0.5,
+                 coef_entropy_loss=0.00,
                  max_grad_norm=0.5,
                  save_dir='save/a3c',
-                 norm_reward=True,
                  norm_advantage=True,
                  clip_grad=True,
                  verbose=True):
-        super(Master, self).__init__(gamma, max_grad_norm, norm_reward, norm_advantage, clip_grad)
+        super(Master, self).__init__(gamma, coef_critic_loss, coef_entropy_loss, 
+                                        max_grad_norm, norm_advantage, clip_grad)
         print(f'Using {self.device.type}\n')
         self.policy = ActorCritic(obs_dim, action_dim, embedding_dim).to(self.device)
         self.optimizer = SharedAdam([
@@ -140,7 +149,8 @@ class Worker(mp.Process, BaseAgent):
 
     def __init__(self, master, rank, lock):
         mp.Process.__init__(self, name=f'worker-{rank:02d}')
-        BaseAgent.__init__(self, master.gamma, master.max_grad_norm, master.norm_reward, master.norm_advantage, master.clip_grad)
+        BaseAgent.__init__(self, master.gamma, master.coef_critic_loss, master.coef_entropy_loss, 
+                            master.max_grad_norm, master.norm_advantage, master.clip_grad)
         self.master = master
         self.rank = rank
         self.lock = lock
@@ -157,30 +167,29 @@ class Worker(mp.Process, BaseAgent):
                 return
             shared_param._grad = param.grad
 
-    def update(self, next_value):
+    def update(self, next_obs):
         action_logprobs = torch.cat(self.buffer.action_logprobs, dim=-1)
         masks = torch.IntTensor(self.buffer.masks).to(self.device)
         rewards = torch.FloatTensor(self.buffer.rewards).to(self.device)
-        self.buffer.values.append(next_value)
-        values = torch.cat(self.buffer.values, dim=-1)
+        # estimate observations
+        self.buffer.observations.append(next_obs)
+        observations = torch.cat(self.buffer.observations, dim=0)
+        values = self.estimate_obs(observations)
         # calculate expected return (n-step Temporal Difference Estimator)
         returns = torch.zeros_like(rewards).to(self.device)
         for i in reversed(range(len(rewards))):
-            pre_return = next_value.detach() if i == len(rewards)-1 else returns[i + 1]
+            pre_return = values[-1].detach() if i == len(rewards)-1 else returns[i + 1]
             returns[i] = rewards[i] + self.gamma * pre_return * masks[i]
-        if self.norm_reward:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-9)
         # calculate advantage 
         advantage = returns - values[:-1].detach()
         if self.norm_advantage:
-            advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-5)
+            advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-9)
         # calculate loss = actor_loss + critic_loss
         # actor_loss = - (advantage * action_log_prob)
-        # critic_loss = MSE(returns, values)
         actor_loss = - (advantage * action_logprobs).mean()
+        # critic_loss = MSE(returns, values)
         critic_loss = self.criterion_cirtic(returns, values[:-1])
-        loss = actor_loss + 0.5 * critic_loss
-
+        loss = actor_loss + self.coef_critic_loss * critic_loss
         # update parameters
         self.optimizer.zero_grad()
         loss.backward()
@@ -208,10 +217,8 @@ def train_worker(env, master, rank, lock, batch_size=64, num_epochs=100, start_e
         for step_idx in range(max_step):
             env.render() if render and worker.rank == 0 else None
             action = worker.select_action(worker.preprocess_obs(obs))
-            value = worker.estimate_obs(worker.preprocess_obs(obs))
             next_obs, reward, done, info = env.step(action)
             # collect experience
-            worker.buffer.values.append(value)
             worker.buffer.rewards.append(reward)
             worker.buffer.masks.append(not done)
             one_epoch_rewards.append(reward)
@@ -219,16 +226,14 @@ def train_worker(env, master, rank, lock, batch_size=64, num_epochs=100, start_e
             obs = next_obs
             # update model
             if worker.buffer.size() == batch_size:
-                next_value = worker.estimate_obs(worker.preprocess_obs(obs))
-                worker.update(next_value)
+                worker.update(worker.preprocess_obs(obs))
             # episode done
             if done:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'{worker.name} | epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
-                    f'({max(cumulative_rewards):4.1f})')
+                    f'({max(cumulative_rewards):4.1f})') if worker.verbose else None
                 break
     env.close()
-
 
 def train(env, master, num_processes=4, batch_size=64, num_epochs=10, start_epoch=0, max_step=200, render=False):
     assert num_processes <= mp.cpu_count()
@@ -282,12 +287,12 @@ if __name__ == '__main__':
     env = gym.make(env_name)
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
-    masker = Master(obs_dim=obs_dim, action_dim=action_dim, embedding_dim=embedding_dim)
+    master = Master(obs_dim=obs_dim, action_dim=action_dim, embedding_dim=embedding_dim)
 
     # train
-    train(env, masker, num_processes=num_processes, batch_size=batch_size, 
+    train(env, master, num_processes=num_processes, batch_size=batch_size, 
         num_epochs=num_epochs, start_epoch=start_epoch, max_step=max_step, render=False)
 
     # evaluate
     checkpoint_path = f'save/a3c/model-{num_epochs*num_processes-1}.pkl'
-    evaluate(env, masker, checkpoint_path, num_epochs=10, max_step=max_step, render=True)
+    evaluate(env, master, checkpoint_path, num_epochs=10, max_step=max_step, render=True)

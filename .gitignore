@@ -1,5 +1,12 @@
+.gitignore
+
+# cache
 *.py[cod]
 __pycache__/
+
+# test
+test/
+test.py
 
 # unfinished
 dqn.py

@@ -1,4 +1,4 @@
 pytorch
 tensorboard
 gym
-tqdm    
+tqdm

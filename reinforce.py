@@ -14,8 +14,8 @@ from base.replay import ReplayBuffer
 
 class ReinforceAgent:
     """
-    A policy-based reinforcement learning algorithm, 
-    using Monte-Carlo Estimator to calculate gradients.
+    A Policy-based reinforcement learning algorithm, 
+    using Monte Carlo Estimator to calculate gradients.
     """
     def __init__(self,
                  obs_dim, 
@@ -25,10 +25,10 @@ class ReinforceAgent:
                  lr_policy=1e-2,
                  lr_decay=0.99,
                  max_grad_norm=0.5,
+                 log_interval=10,
                  log_dir='logs/reinforce',
                  save_dir='save/reinforce',
                  use_cuda=True,
-                 norm_reward=True,
                  clip_grad=True,
                  open_tb=True,
                  open_tqdm=False,
@@ -45,12 +45,12 @@ class ReinforceAgent:
 
         self.gamma = gamma
         self.max_grad_norm = max_grad_norm
+        self.log_interval = log_interval
 
         if not os.path.exists(save_dir): 
             os.mkdir(save_dir)
         self.save_dir = save_dir
 
-        self.norm_reward = norm_reward
         self.clip_grad = clip_grad
         self.open_tb = open_tb
         self.open_tqdm = open_tqdm
@@ -68,9 +68,10 @@ class ReinforceAgent:
         if sample:
             action = dist.sample()
         else:
-            action = action_probs.argmax(-1, keepdim=True)
+            action = action_probs.argmax(-1)
         action_logprob = dist.log_prob(action)
         # collect
+        self.buffer.observations.append(obs)
         self.buffer.action_logprobs.append(action_logprob)
         self.buffer.actions.append(action)
         return action.item()
@@ -79,13 +80,11 @@ class ReinforceAgent:
         action_logprobs = torch.cat(self.buffer.action_logprobs, dim=-1)
         masks = torch.IntTensor(self.buffer.masks).to(self.device)
         rewards = torch.FloatTensor(self.buffer.rewards).to(self.device)
-        # calculate expected return (Monte Carlo)
+        # calculate expected return (Monte Carlo Estimator)
         returns = torch.zeros_like(rewards).to(self.device)
         for i in reversed(self.buffer.size()):
             last_return = 0 if i == self.buffer.size() - 1 else returns[i + 1]
             returns[i] = rewards[i] + self.gamma * last_return * masks[i]
-        if self.norm_reward:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-9)
         # calculate policy loss = - (Q_value * action_log_prob)
         loss = - (returns * action_logprobs).mean()
         # update parameters
@@ -96,11 +95,12 @@ class ReinforceAgent:
         self.optimizer.step()
         self.lr_scheduler.step()
         # log info
-        if self.open_tb:
-            self.writer.add_scalar('loss/loss', loss, self.update_time)
-            self.writer.add_scalar('value/returns', returns.mean(), self.update_time)
-            self.writer.add_scalar('value/rewards', rewards.mean(), self.update_time)
-            self.writer.add_scalar('grad/policy_grad_clipped', policy_grad_clipped, self.update_time)
+        if self.open_tb and self.update_time % self.log_interval == 0:
+            self.writer.add_scalar('train_lr', self.optimizer.defaults['lr'], self.update_time)
+            self.writer.add_scalar('train_loss/loss', loss, self.update_time)
+            self.writer.add_scalar('train_value/returns', returns.mean(), self.update_time)
+            self.writer.add_scalar('train_value/rewards', rewards.mean(), self.update_time)
+            self.writer.add_scalar('train_grad/policy_grad_clipped', policy_grad_clipped, self.update_time)
 
         self.update_time += 1
         self.buffer.clear()
@@ -156,7 +156,7 @@ def train(env, agent, num_epochs=100, start_epoch=0, max_step=200, render=False)
                 loss = agent.update()
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
-                    f'({max(cumulative_rewards):4.1f}), loss: {loss:2.4f}')
+                    f'({max(cumulative_rewards):4.1f}), loss: {loss:2.4f}') if agent.verbose else None
         # save model
         if epoch_idx % 1000 == 0 or epoch_idx == num_epochs - 1:
             agent.save(epoch_idx=epoch_idx)
@@ -191,9 +191,9 @@ if __name__ == '__main__':
     # config
     env_name = 'CartPole-v0'
     num_epochs = 500
-    embedding_dim=64
+    embedding_dim = 64
     start_epoch = 0
-    max_step=200
+    max_step = 200
 
     # initialize
     env = gym.make(env_name)

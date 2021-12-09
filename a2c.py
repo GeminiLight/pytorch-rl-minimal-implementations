@@ -1,6 +1,7 @@
 import os
 import gym
 import copy
+from gym.core import ObservationWrapper
 import tqdm
 import torch
 from torch import nn, optim
@@ -25,13 +26,15 @@ class A2CAgent:
                  lr_actor=1e-2,
                  lr_critic=1e-2,
                  lr_decay=0.99,
+                 coef_critic_loss=0.5,
+                 coef_entropy_loss=0.00,
                  max_grad_norm=0.5,
+                 log_interval=10,
                  log_dir='logs/a2c',
                  save_dir='save/a2c',
-                 use_cuda=True,
-                 norm_reward=True,
                  norm_advantage=True,
                  clip_grad=True,
+                 use_cuda=True,
                  open_tb=True,
                  open_tqdm=False,
                  verbose=True):
@@ -45,16 +48,18 @@ class A2CAgent:
         self.writer = SummaryWriter(log_dir)
         self.lr_scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lambda epoch: lr_decay ** epoch)
         self.buffer = ReplayBuffer()
+        self.criterion_cirtic = nn.MSELoss()
 
         self.gamma = gamma
         self.max_grad_norm = max_grad_norm
-        self.criterion_cirtic = nn.MSELoss()
+        self.coef_critic_loss = coef_critic_loss
+        self.coef_entropy_loss = coef_entropy_loss  # unsupported currently
+        self.log_interval = log_interval
 
         if not os.path.exists(save_dir): 
             os.mkdir(save_dir)
         self.save_dir = save_dir
 
-        self.norm_reward = norm_reward
         self.norm_advantage = norm_advantage
         self.clip_grad = clip_grad
         self.open_tb = open_tb
@@ -73,41 +78,40 @@ class A2CAgent:
         if sample:
             action = dist.sample()
         else:
-            action = action_probs.argmax(-1, keepdim=True)
+            action = action_probs.argmax(-1)
         action_logprob = dist.log_prob(action)
         # collect
-        agent.buffer.actions.append(action)
-        agent.buffer.action_logprobs.append(action_logprob)
+        self.buffer.observations.append(obs)
+        self.buffer.actions.append(action)
+        self.buffer.action_logprobs.append(action_logprob)
         return action.item()
 
     def estimate_obs(self, obs):
-        value = self.policy.estimate(obs).squeeze(-1)
-        return value
+        value = self.policy.estimate(obs)
+        return value.squeeze(-1)
 
-    def update(self, next_value):
-        action_logprobs = torch.cat(self.buffer.action_logprobs, dim=-1)
+    def update(self, next_obs):
+        self.buffer.observations.append(next_obs)
+        observations = torch.cat(self.buffer.observations, dim=0)
+        values = self.estimate_obs(observations)
+        action_logprobs = torch.cat(self.buffer.action_logprobs, dim=0)
         masks = torch.IntTensor(self.buffer.masks).to(self.device)
         rewards = torch.FloatTensor(self.buffer.rewards).to(self.device)
-        self.buffer.values.append(next_value)
-        values = torch.cat(self.buffer.values, dim=-1)
         # calculate expected return (n-step Temporal Difference Estimator)
         returns = torch.zeros_like(rewards).to(self.device)
         for i in reversed(range(len(rewards))):
-            pre_return = next_value.detach() if i == len(rewards)-1 else returns[i + 1]
+            pre_return = values[-1].detach() if i == len(rewards)-1 else returns[i + 1]
             returns[i] = rewards[i] + self.gamma * pre_return * masks[i]
-        if self.norm_reward:
-            returns = (returns - returns.mean()) / (returns.std() + 1e-9)
         # calculate advantage
         advantage = returns - values[:-1].detach()
         if self.norm_advantage:
             advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-9)
         # calculate loss = actor_loss + critic_loss
         # actor_loss = - (advantage * action_log_prob)
-        # critic_loss = MSE(returns, values)
         actor_loss = - (advantage * action_logprobs).mean()
+        # critic_loss = MSE(returns, values)
         critic_loss = self.criterion_cirtic(returns, values[:-1])
-        loss = actor_loss + 0.5 * critic_loss
-
+        loss = actor_loss + self.coef_critic_loss * critic_loss
         # update parameters
         self.optimizer.zero_grad()
         loss.backward()
@@ -116,17 +120,17 @@ class A2CAgent:
             critic_grad_clipped = torch.nn.utils.clip_grad_norm_(self.policy.critic.parameters(), self.max_grad_norm)
         self.optimizer.step()
         self.lr_scheduler.step()
-
         # log info
-        if self.open_tb:
-            self.writer.add_scalar('loss/loss', loss, self.update_time)
-            self.writer.add_scalar('loss/actor_loss', actor_loss, self.update_time)
-            self.writer.add_scalar('loss/critic_loss', critic_loss, self.update_time)
-            self.writer.add_scalar('value/values', values[:-1].mean(), self.update_time)
-            self.writer.add_scalar('value/returns', returns.mean(), self.update_time)
-            self.writer.add_scalar('value/rewards', rewards.mean(), self.update_time)
-            self.writer.add_scalar('grad/actor_grad_clipped', actor_grad_clipped, self.update_time)
-            self.writer.add_scalar('grad/critic_grad_clipped', critic_grad_clipped, self.update_time)
+        if self.open_tb and self.update_time % self.log_interval == 0:
+            self.writer.add_scalar('train_lr', self.optimizer.defaults['lr'], self.update_time)
+            self.writer.add_scalar('train_loss/loss', loss, self.update_time)
+            self.writer.add_scalar('train_loss/actor_loss', actor_loss, self.update_time)
+            self.writer.add_scalar('train_loss/critic_loss', critic_loss, self.update_time)
+            self.writer.add_scalar('train_value/values', values[:-1].mean(), self.update_time)
+            self.writer.add_scalar('train_value/returns', returns.mean(), self.update_time)
+            self.writer.add_scalar('train_value/rewards', rewards.mean(), self.update_time)
+            self.writer.add_scalar('train_grad/actor_grad_clipped', actor_grad_clipped, self.update_time)
+            self.writer.add_scalar('train_grad/critic_grad_clipped', critic_grad_clipped, self.update_time)
 
         self.update_time += 1
         self.buffer.clear()
@@ -169,10 +173,8 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs))
-            value = agent.estimate_obs(agent.preprocess_obs(obs))
             next_obs, reward, done, info = env.step(action)
             # collect experience
-            agent.buffer.values.append(value)
             agent.buffer.rewards.append(reward)
             agent.buffer.masks.append(not done)
             one_epoch_rewards.append(reward)
@@ -180,13 +182,12 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
             obs = next_obs
             # update model
             if agent.buffer.size() == batch_size:
-                next_value = agent.estimate_obs(agent.preprocess_obs(obs))
-                agent.update(next_value)
+                agent.update(agent.preprocess_obs(obs))
             # episode done
             if done:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
-                    f'({max(cumulative_rewards):4.1f})')
+                    f'({max(cumulative_rewards):4.1f})') if agent.verbose else None
                 break
         # save model
         if epoch_idx % 1000 == 0 or epoch_idx == num_epochs - 1:
@@ -221,11 +222,11 @@ def evaluate(env, agent, checkpoint_path, num_epochs=10, max_step=200, render=Fa
 if __name__ == '__main__':
     # config
     env_name = 'CartPole-v0'
-    embedding_dim=64
-    num_epochs = 1000
-    start_epoch=0
+    embedding_dim = 64
+    num_epochs = 500
+    start_epoch = 0
     batch_size = 64
-    max_step=200
+    max_step = 200
     
     # initialize
     env = gym.make(env_name)

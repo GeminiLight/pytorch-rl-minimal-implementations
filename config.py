@@ -23,7 +23,7 @@ agent_arg = parser.add_argument_group('agent')
 # print info
 agent_arg.add_argument('--verbose', type=str2bool, default=True, help='')
 agent_arg.add_argument('--open_tqdm', type=str2bool, default=True, help='')
-agent_arg.add_argument('--open_tensorboard', type=str2bool, default=True, help='')
+agent_arg.add_argument('--open_tb', type=str2bool, default=True, help='')
 # cuda and parallelism
 agent_arg.add_argument('--use_cuda', type=str2bool, default=True, help='')
 agent_arg.add_argument('--allow_parallel', type=str2bool, default=False, help='')

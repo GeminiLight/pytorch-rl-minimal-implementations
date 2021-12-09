@@ -67,9 +67,11 @@ class QLearningAgent:
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = min_epsilon
+
         if not os.path.exists(save_dir): 
             os.mkdir(save_dir)
         self.save_dir = save_dir
+
         self.open_tqdm = open_tqdm
         self.verbose = verbose
 
@@ -143,8 +145,8 @@ def train(env, agent, num_epochs=1, start_epoch=0, max_step=200, render=False):
     # save model
     agent.save(epoch_idx=epoch_idx)
 
-def evaluate(env, agent, num_epochs=10, max_step=200, render=False):
-    agent.load(f'./vanilla/q_learning/save/{env_name}.pickle')
+def evaluate(env, agent, checkpoint_path, num_epochs=10, max_step=200, render=False):
+    agent.load(checkpoint_path)
     agent.eval()
     cumulative_rewards = []
     for epoch_idx in range(num_epochs):

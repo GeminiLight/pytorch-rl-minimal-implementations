@@ -19,22 +19,6 @@ class Actor(nn.Module):
 
     def __init__(self, input_dim, output_dim, embedding_dim=64):
         super(Actor, self).__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(input_dim, embedding_dim),
-            nn.ReLU(),
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.ReLU(),
-            nn.Linear(embedding_dim, output_dim)
-        )
-
-    def forward(self, x):
-        return self.mlp(x)
-
-
-class Actor(nn.Module):
-
-    def __init__(self, input_dim, output_dim, embedding_dim=64):
-        super(Actor, self).__init__()
         self.mlp = MLPNet(input_dim, output_dim, embedding_dim)
 
     def forward(self, x):
@@ -52,6 +36,7 @@ class Critic(nn.Module):
 
 
 class MLPNet(nn.Module):
+    
     def __init__(self, input_dim, output_dim, embedding_dim=64):
         super(MLPNet, self).__init__()
         self.net = nn.Sequential(
@@ -64,3 +49,11 @@ class MLPNet(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+def layer_norm(net, init_method='orthogonal', weight_std=1.0, bias_const=0.0):
+    for name, param in net.named_parameters():
+        if name.endswith('weight'):
+            nn.init.orthogonal_(param, weight_std)
+        elif name.endswith('bias'):
+            nn.init.constant_(param, bias_const)
