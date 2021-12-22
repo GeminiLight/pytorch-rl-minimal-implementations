@@ -47,7 +47,7 @@ class MLPNet(nn.Module):
             nn.Linear(embedding_dim, output_dim)
         )
 
-    def forward(self, x):
+    def forward(self, x):       
         return self.net(x)
 
 

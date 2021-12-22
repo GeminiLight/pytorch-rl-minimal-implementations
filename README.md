@@ -4,14 +4,14 @@ There are implementations of some reinforcement learning algorithms, whose chara
 
 1. **Less packages-based**:  Only PyTorch and Gym, for building neural networks and testing algorithms' performance respectively,  are necessary to install.
 2. **Independent implementation**: All RL algorithms are implemented in separate files, which facilitates to understand their processes and modify them to adapt to other tasks.
-3. **Various expansion configurations**: It's convenient to configure various parameters and tools, such as reward normalization, advantage normalization, tensorboard, tqdm and so on.
+3. **Various expansion configurations**: It's convenient to configure various parameters and tools, such as advantage normalization, tensorboard, tqdm and so on.
 
 ## RL Algorithms List
 
 | Name       | Type                     | Estimator                               | Paper                                                        | File                           |
 | ---------- | ------------------------ | --------------------------------------- | ------------------------------------------------------------ | ------------------------------ |
 | Q-Learning | Value-based / Off policy | TD                                      | Watkins et al. [Q-Learning](https://link.springer.com/content/pdf/10.1007/BF00992698.pdf). *Machine Learning*, 1992 | [q_learning.py](q_learning.py) |
-| REINFORCE  | Policy-based On policy   | MC                                      | Sutton et al. [Policy Gradient Methods for Reinforcement Learning with Function Approximation](https://proceedings.neurips.cc/paper/1999/file/464d828b85b0bed98e80ade0a5c43b0f-Paper.pdf). In *NeurIPS*, 2000. | [reinforce.py](reinforce.py)   |
+| REINFORCE  | Policy-based / On policy | MC                                      | Sutton et al. [Policy Gradient Methods for Reinforcement Learning with Function Approximation](https://proceedings.neurips.cc/paper/1999/file/464d828b85b0bed98e80ade0a5c43b0f-Paper.pdf). In *NeurIPS*, 2000. | [reinforce.py](reinforce.py)   |
 | DQN        | Value-based / Off policy | TD                                      | Mnih et al. [Human-level control through deep reinforcement learning](https://www.nature.com/articles/nature14236). *Nature*, 2015. | doing                          |
 | A2C        | Actor-Critic / On policy | n-step TD                               | Mnih et al. [Asynchronous Methods for Deep Reinforcement Learning](https://arxiv.org/abs/1602.01783). In *ICML*, 2016. | [a2c.py](a2c.py)               |
 | A3C        | Actor-Critic / On policy | n-step TD                               | .Mnih et al. [Asynchronous Methods for Deep Reinforcement Learning](https://arxiv.org/abs/1602.01783). In *ICML*, 2016 | [a3c.py](a3c.py)               |
@@ -70,8 +70,8 @@ tqdm         # for process bar
 
 ### Update History
 
-- `2021-12-09` `ADD` `TRICK`:norm_critic_loss in PPO
-- `2021-12-09` `ADD` `PARAM`: coef_critic_loss, coef_entropy_loss, log_step
+- `2021-12-09` `ADD` `TRICK`: norm_critic_loss in PPO
+- `2021-12-09` `ADD` `PARAM`: coef_critic_loss, coef_entropy_loss, log_interval
 - `2021-12-07` `ADD` `ALGO`: A3C
 - `2021-12-05` `ADD` `ALGO`: PPO
 - `2021-11-28` `ADD` `ALGO`: A2C
