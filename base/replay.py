@@ -4,7 +4,7 @@ import numpy as np
 
 class ReplayBuffer:
 
-    def __init__(self):
+    def __init__(self, buffer_size=128):
         self.observations = []
         self.actions = []
         self.action_logprobs = []
@@ -58,9 +58,9 @@ class ReplayBuffer:
             last_gae = 0
             for i in reversed(range(self.buffer.size())):
                 last_value = next_value if i == len(self.rewards)-1 else returns[i + 1]
-                delta = self.rewards[i] + gamma * last_value * self.masks[i] - self.values[i]
-                last_gae = delta + gamma * gae_lambda * self.masks[i] * last_gae
-                self.returns[i] = last_gae + self.values[i]
+                delta = self.rewards[i] + (gamma * last_value - self.values[i]) * self.masks[i]
+                last_gae = delta + gamma * gae_lambda * last_gae * self.masks[i]
+                self.returns[i] = last_gae + self.values[i] * self.masks[i]
         elif method == 'n_step':
             for i in reversed(range(len(self.rewards))):
                 last_return = next_value if i == len(self.rewards)-1 else returns[i + 1]

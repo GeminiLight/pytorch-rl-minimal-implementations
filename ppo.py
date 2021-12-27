@@ -125,9 +125,9 @@ class PPOAgent:
             returns = torch.zeros_like(rewards).to(self.device)
             last_gae = 0
             for i in reversed(range(self.buffer.size())):
-                delta = rewards[i] + self.gamma * values[i + 1].detach() * masks[i] - values[i].detach()
-                last_gae = delta + self.gamma * self.gae_lambda * masks[i] * last_gae
-                returns[i] = last_gae + values[i].detach()
+                delta = rewards[i] + self.gamma * (values[i + 1].detach() - values[i].detach()) * masks[i]
+                last_gae = delta + self.gamma * self.gae_lambda * last_gae * masks[i]
+                returns[i] = last_gae + values[i].detach() * masks[i]
             # calculate advantage
             advantage = returns - values[:-1].detach()
             if self.norm_advantage:
