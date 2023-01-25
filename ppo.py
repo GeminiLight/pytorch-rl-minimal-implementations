@@ -110,26 +110,25 @@ class PPOAgent:
         return action_logprobs, dist_entropy, value
 
     def update(self, next_obs):
-        old_actions = torch.cat(self.buffer.actions, dim=0)
+        actions = torch.cat(self.buffer.actions, dim=0)
         old_action_logprobs = torch.cat(self.buffer.action_logprobs, dim=0)
-        old_observations = torch.cat(self.buffer.observations, dim=0)
+        self.buffer.observations.append(next_obs)
+        observations = torch.cat(self.buffer.observations, dim=0)
         masks = torch.IntTensor(self.buffer.masks).to(self.device)
         rewards = torch.FloatTensor(self.buffer.rewards).to(self.device)
-        observations = copy.deepcopy(self.buffer.observations)
-        observations.append(next_obs)
-        observations = torch.cat(observations, dim=0)
 
         for i in range(self.K_epochs):
             # evaluate actions and observations
-            action_logprobs, dist_entropy, values = self.evaluate_actions(old_observations, old_actions)
+            action_logprobs, dist_entropy, old_obs_values = self.evaluate_actions(observations[:-1], actions)
             values = self.estimate_obs(observations)
             # calculate expected return (Genralized Advantage Estimator)
-            returns = torch.zeros_like(rewards).to(self.device)
-            last_gae = 0
+            # returns = torch.zeros_like(rewards).to(self.device)
+            all_advantage = torch.zeros(self.buffer.size() + 1)
             for i in reversed(range(self.buffer.size())):
-                delta = rewards[i] + self.gamma * (values[i + 1].detach() - values[i].detach()) * masks[i]
-                last_gae = delta + self.gamma * self.gae_lambda * last_gae * masks[i]
-                returns[i] = last_gae + values[i].detach() * masks[i]
+                delta = rewards[i] + self.gamma * (values[i+1].detach() * masks[i]) - values[i]
+                all_advantage[i] = delta + (self.gamma * self.gae_lambda * all_advantage[i + 1] * masks[i])
+            returns = all_advantage[:-1] + values[:-1].squeeze(0)
+            
             # calculate advantage
             advantage = returns - values[:-1].detach()
             if self.norm_advantage:
@@ -171,7 +170,6 @@ class PPOAgent:
         
         self.lr_scheduler.step()
         self.buffer.clear()
-
         return loss.detach()
 
     def train(self, mode=True):
