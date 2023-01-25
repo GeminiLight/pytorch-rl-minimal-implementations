@@ -9,8 +9,8 @@ import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from base.net import ActorCritic
-from base.replay import ReplayBuffer
+from common.net import ActorCritic
+from common.replay import ReplayBuffer
 
 
 class SharedAdam(optim.Adam):
@@ -34,9 +34,9 @@ class SharedAdam(optim.Adam):
                 state['exp_avg_sq'] = torch.zeros_like(p.data)
 
 
-class BaseAgent:
+class commonAgent:
     """
-    An Asynchronous Actor Critic-based reinforcement learning algorithm, 
+    An Asynchronous Actor Critic-commond reinforcement learning algorithm, 
     using n-step Temporal Difference Estimator to calculate gradients.
     """
     def __init__(self, 
@@ -87,7 +87,7 @@ class BaseAgent:
         self.policy.eval()
 
 
-class Master(BaseAgent):
+class Master(commonAgent):
 
     def __init__(self,
                  obs_dim, 
@@ -145,11 +145,11 @@ class Master(BaseAgent):
             print(f'Load failed! Initialize parameters randomly\n')
 
 
-class Worker(mp.Process, BaseAgent):
+class Worker(mp.Process, commonAgent):
 
     def __init__(self, master, rank, lock):
         mp.Process.__init__(self, name=f'worker-{rank:02d}')
-        BaseAgent.__init__(self, master.gamma, master.coef_critic_loss, master.coef_entropy_loss, 
+        commonAgent.__init__(self, master.gamma, master.coef_critic_loss, master.coef_entropy_loss, 
                             master.max_grad_norm, master.norm_advantage, master.clip_grad)
         self.master = master
         self.rank = rank
@@ -213,14 +213,14 @@ def train_worker(env, master, rank, lock, batch_size=64, num_epochs=100, start_e
     for epoch_idx in range(start_epoch, start_epoch + num_epochs):
         worker.train()
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render and worker.rank == 0 else None
             action = worker.select_action(worker.preprocess_obs(obs))
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             # collect experience
             worker.buffer.rewards.append(reward)
-            worker.buffer.masks.append(not done)
+            worker.buffer.masks.append(not (terminated or truncated))
             one_epoch_rewards.append(reward)
             # obs transition
             obs = next_obs
@@ -228,7 +228,7 @@ def train_worker(env, master, rank, lock, batch_size=64, num_epochs=100, start_e
             if worker.buffer.size() == batch_size:
                 worker.update(worker.preprocess_obs(obs))
             # episode done
-            if done:
+            if terminated or truncated:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'{worker.name} | epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
                     f'({max(cumulative_rewards):4.1f})') if worker.verbose else None
@@ -254,17 +254,17 @@ def evaluate(env, master, checkpoint_path, num_epochs=10, max_step=200, render=F
     cumulative_rewards = []
     for epoch_idx in range(num_epochs):
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = master.select_action(master.preprocess_obs(obs), sample=False)
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             # collect experience
             one_epoch_rewards.append(reward)
             # obs transition
             obs = next_obs
             # episode done
-            if done:
+            if terminated or truncated:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
                     f'({max(cumulative_rewards):4.1f})')

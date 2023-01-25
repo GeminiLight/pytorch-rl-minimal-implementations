@@ -8,13 +8,13 @@ from torch.nn import functional as F
 from torch.distributions import Categorical
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from base.net import ActorCritic
-from base.replay import ReplayBuffer
+from common.net import ActorCritic
+from common.replay import ReplayBuffer
 
 
 class PPOAgent:
     """
-    An Actor-Critic-based reinforcement learning algorithm, 
+    An Actor-Critic-commond reinforcement learning algorithm, 
     using Genralized Advantage Estimator to calculate gradients.
     """
     def __init__(self,
@@ -79,7 +79,7 @@ class PPOAgent:
     def preprocess_obs(self, obs):
         return torch.FloatTensor(obs).to(self.device).unsqueeze(0)
 
-    def select_action(self, obs, sample=True):
+    def select_action(self, obs, mask=None, sample=True):
         with torch.no_grad():
             action_logits = self.policy.act(obs)
         action_probs = F.softmax(action_logits, dim=-1)
@@ -105,7 +105,9 @@ class PPOAgent:
         dist = Categorical(actions_probs)
         action_logprobs = dist.log_prob(old_actions)
         dist_entropy = dist.entropy()
-        return action_logprobs, dist_entropy
+
+        value = self.policy.estimate(old_observations).squeeze(-1)
+        return action_logprobs, dist_entropy, value
 
     def update(self, next_obs):
         old_actions = torch.cat(self.buffer.actions, dim=0)
@@ -119,7 +121,7 @@ class PPOAgent:
 
         for i in range(self.K_epochs):
             # evaluate actions and observations
-            action_logprobs, dist_entropy = self.evaluate_actions(old_observations, old_actions)
+            action_logprobs, dist_entropy, values = self.evaluate_actions(old_observations, old_actions)
             values = self.estimate_obs(observations)
             # calculate expected return (Genralized Advantage Estimator)
             returns = torch.zeros_like(rewards).to(self.device)
@@ -143,7 +145,7 @@ class PPOAgent:
             critic_loss = self.criterion_cirtic(returns, values[:-1]) / benchmark_critic_loss
             # entropy_loss = Entropy(prob)
             entropy_loss = dist_entropy.mean()
-            loss = actor_loss + self.coef_critic_loss * critic_loss + self.coef_entropy_loss * entropy_loss
+            loss = actor_loss + self.coef_critic_loss * critic_loss - self.coef_entropy_loss * entropy_loss
             # update parameters 
             self.optimizer.zero_grad()
             loss.backward()
@@ -205,14 +207,14 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
     pbar = tqdm.tqdm(desc='epoch', total=num_epochs) if agent.open_tqdm else None
     for epoch_idx in range(start_epoch, start_epoch + num_epochs):
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs))
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             # collect experience
             agent.buffer.rewards.append(reward)
-            agent.buffer.masks.append(not done)
+            agent.buffer.masks.append(not (terminated or truncated))
             one_epoch_rewards.append(reward)
             # obs transition
             obs = next_obs
@@ -221,7 +223,7 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
                 loss = agent.update(agent.preprocess_obs(next_obs))
                 pbar.set_postfix(loss=loss.item()) if pbar is not None else None
             # episode done
-            if done:
+            if terminated or truncated:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
                     f'({max(cumulative_rewards):4.1f})') if agent.verbose else None
@@ -241,16 +243,16 @@ def evaluate(env, agent, checkpoint_path, num_epochs=10, max_step=200, render=Fa
     cumulative_rewards = []
     for epoch_idx in range(num_epochs):
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs), sample=False)
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             one_epoch_rewards.append(reward)
             # obs transition
             obs = next_obs
             # episode done
-            if done:
+            if terminated or truncated:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
                     f'({max(cumulative_rewards):4.1f})')

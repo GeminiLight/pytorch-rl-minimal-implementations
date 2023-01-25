@@ -4,6 +4,10 @@
 *.py[cod]
 __pycache__/
 
+# record
+logs/
+save/
+
 # test
 test/
 test.py

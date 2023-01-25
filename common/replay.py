@@ -38,7 +38,7 @@ class ReplayBuffer:
         del self.rewards[:]
         del self.masks[:]
 
-    def calc_returns(self, next_value=0, method='gae', gamma=0.99, gae_lambda=0.95):
+    def calc_returns(self, next_value=0, method='gae', gamma=0.99, gae_lambda=0.98):
         r"""Calculate expected returns
         
         1. mc     | Monte Carlo

@@ -9,13 +9,13 @@ from torch.nn import functional as F
 from torch.distributions import Categorical
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from base.net import ActorCritic
-from base.replay import ReplayBuffer
+from common.net import ActorCritic
+from common.replay import ReplayBuffer
 
 
 class A2CAgent:
     """
-    An Actor-Critic-based reinforcement learning algorithm, 
+    An Actor-Critic-commond reinforcement learning algorithm, 
     using n-step Temporal Difference Estimator to calculate gradients.
     """
     def __init__(self,
@@ -169,14 +169,15 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
     pbar = tqdm.tqdm(desc='epoch', total=num_epochs) if agent.open_tqdm else None
     for epoch_idx in range(start_epoch, start_epoch + num_epochs):
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs))
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             # collect experience
+            reward = reward * 100
             agent.buffer.rewards.append(reward)
-            agent.buffer.masks.append(not done)
+            agent.buffer.masks.append(not (terminated or truncated))
             one_epoch_rewards.append(reward)
             # obs transition
             obs = next_obs
@@ -184,7 +185,7 @@ def train(env, agent, batch_size=64, num_epochs=100, start_epoch=0, max_step=200
             if agent.buffer.size() == batch_size:
                 agent.update(agent.preprocess_obs(obs))
             # episode done
-            if done:
+            if terminated or truncated:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
                     f'({max(cumulative_rewards):4.1f})') if agent.verbose else None
@@ -202,16 +203,16 @@ def evaluate(env, agent, checkpoint_path, num_epochs=10, max_step=200, render=Fa
     cumulative_rewards = []
     for epoch_idx in range(num_epochs):
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs), sample=False)
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             one_epoch_rewards.append(reward)
             # obs transition
             obs = next_obs
             # episode done
-            if done:
+            if terminated or truncated:
                 cumulative_rewards.append(sum(one_epoch_rewards))
                 print(f'epoch {epoch_idx:3d} | cumulative reward (max): {cumulative_rewards[-1]:4.1f} ' + 
                     f'({max(cumulative_rewards):4.1f})')

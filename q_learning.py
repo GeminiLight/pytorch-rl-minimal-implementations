@@ -29,7 +29,7 @@ class Transform:
 
 class QLearningAgent:
     r"""
-    A value-based reinforcement learning algorithm,
+    A value-commond reinforcement learning algorithm,
     using Temporal Difference Estimator to update Q-table.
 
     1. Initialize the Q-tables for observation-action pairs
@@ -127,16 +127,16 @@ def train(env, agent, num_epochs=1, start_epoch=0, max_step=200, render=False):
     agent.train()
     cumulative_rewards = []
     for epoch_idx in range(start_epoch, start_epoch + num_epochs):
-        obs = env.reset()
+        obs, info = env.reset()
         one_epoch_reward = []
         for i in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs))
-            next_obs, reward, done, info = env.step(action)
-            agent.update(obs, action, reward, done, next_obs)
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            agent.update(obs, action, reward, terminated or truncated, next_obs)
             obs = next_obs
             one_epoch_reward.append(reward)
-            if done:
+            if terminated or truncated:
                 break
         cumulative_rewards.append(sum(one_epoch_reward))
         print(f'epoch: {epoch_idx}, cumulative_reward (max): {cumulative_rewards[-1]:5.1f}' +
@@ -150,15 +150,15 @@ def evaluate(env, agent, checkpoint_path, num_epochs=10, max_step=200, render=Fa
     agent.eval()
     cumulative_rewards = []
     for epoch_idx in range(num_epochs):
-        obs = env.reset()
+        obs, info = env.reset()
         one_epoch_reward = []
         for i in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs))
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             obs = next_obs
             one_epoch_reward.append(reward)
-            if done:
+            if terminated or truncated:
                 break
         cumulative_rewards.append(sum(one_epoch_reward))
         print(f'epoch: {epoch_idx}, cumulative_reward (max): {cumulative_rewards[-1]:5.1f}' +

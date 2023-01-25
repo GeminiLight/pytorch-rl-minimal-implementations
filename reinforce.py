@@ -1,5 +1,4 @@
 import os
-from pickle import TRUE
 import gym
 import tqdm
 import torch
@@ -8,13 +7,13 @@ from torch.nn import functional as F
 from torch.distributions import Categorical
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from base.net import Actor
-from base.replay import ReplayBuffer
+from common.net import Actor
+from common.replay import ReplayBuffer
 
 
 class ReinforceAgent:
     """
-    A Policy-based reinforcement learning algorithm, 
+    A Policy-commond reinforcement learning algorithm, 
     using Monte Carlo Estimator to calculate gradients.
     """
     def __init__(self,
@@ -140,7 +139,7 @@ def train(env, agent, num_epochs=100, start_epoch=0, max_step=200, render=False)
     pbar = tqdm.tqdm(desc='epoch', total=num_epochs) if agent.open_tqdm else None
     for epoch_idx in range(start_epoch, start_epoch + num_epochs):
         one_epoch_rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs))
@@ -171,7 +170,7 @@ def evaluate(env, agent, checkpoint_path, num_epochs=10, max_step=200, render=Fa
     cumulative_rewards = []
     for epoch_idx in range(num_epochs):
         rewards = []
-        obs = env.reset()
+        obs, info = env.reset()
         for step_idx in range(max_step):
             env.render() if render else None
             action = agent.select_action(agent.preprocess_obs(obs), sample=False)
