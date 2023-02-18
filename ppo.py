@@ -35,7 +35,7 @@ class PPOAgent:
                  log_dir='logs/ppo',
                  save_dir='save/ppo',
                  norm_advantage=True,
-                 norm_critic_loss=True,
+                 norm_critic_loss=False,
                  clip_grad=True,
                  use_cuda=True,
                  open_tb=True,
@@ -262,7 +262,7 @@ if __name__ == '__main__':
     # config
     env_name = 'CartPole-v0'
     embedding_dim = 64
-    num_epochs = 2000
+    num_epochs = 500
     start_epoch = 0
     batch_size = 64
     max_step = 200
